@@ -2,53 +2,51 @@ package logger
 
 import (
 	"encoding/csv"
-	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
 type CSVLogger struct {
-	file   *os.File
-	writer *csv.Writer
-	mu     sync.Mutex
-	name   string
+	file  *os.File
+	w     *csv.Writer
+	mutex sync.Mutex
 }
 
-func NewCSVLogger() (*CSVLogger, error) {
-	ts := time.Now().Format("20060102_150405")
-	name := fmt.Sprintf("data_%s.csv", ts)
-	f, err := os.Create(name)
-	if err != nil {
-		return nil, err
-	}
-	return &CSVLogger{file: f, writer: csv.NewWriter(f), name: name}, nil
-}
+// Create logs directory & new .csv file using timestamp
+func New(dir string) *CSVLogger {
+	os.MkdirAll(dir, 0755)
 
-func (l *CSVLogger) Write(timestamp, line string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	_ = l.writer.Write([]string{timestamp, line})
-	l.writer.Flush()
-}
+	filename := time.Now().Format("2006-01-02_15-04-05") + ".csv"
+	path := filepath.Join(dir, filename)
 
-func (l *CSVLogger) CloseAndSave() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.file != nil {
-		l.file.Close()
-		l.file = nil
+	f, _ := os.Create(path)
+	w := csv.NewWriter(f)
+
+	// Write header
+	w.Write([]string{"timestamp_ms", "data"})
+	w.Flush()
+
+	return &CSVLogger{
+		file: f,
+		w:    w,
 	}
 }
 
-func (l *CSVLogger) Discard() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.file == nil {
-		return nil
-	}
-	name := l.name
-	_ = l.file.Close()
-	l.file = nil
-	return os.Remove(name)
+// WriteLine writes log entry into csv safely
+func (l *CSVLogger) WriteLine(data string) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+
+	ts := time.Now().UnixMilli()
+
+	_ = l.w.Write([]string{time.UnixMilli(ts).Format(time.RFC3339Nano), data})
+	l.w.Flush()
+}
+
+// Close closes the file
+func (l *CSVLogger) Close() {
+	l.w.Flush()
+	l.file.Close()
 }
