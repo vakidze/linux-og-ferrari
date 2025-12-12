@@ -16,13 +16,23 @@ func ListPorts() ([]string, error) {
 	return ports, nil
 }
 
-// ReadLinesToChan opens the port and sends cleaned lines to the channel. The caller should stop the program to close the port.
+// Open opens a serial port and returns its handle
+func Open(port string, baud int) (*serial.Port, error) {
+	cfg := &serial.Config{
+		Name: port,
+		Baud: baud,
+		ReadTimeout: time.Second * 2,
+	}
+	return serial.OpenPort(cfg)
+}
+
+// ReadLinesToChan opens the port and streams cleaned lines into a channel.
 func ReadLinesToChan(port string, baud int, filterFn func(string) bool) (<-chan string, error) {
 	if port == "" {
 		return nil, errors.New("empty port")
 	}
-	cfg := &serial.Config{Name: port, Baud: baud, ReadTimeout: time.Second * 2}
-	s, err := serial.OpenPort(cfg)
+
+	s, err := Open(port, baud)
 	if err != nil {
 		return nil, err
 	}
@@ -31,38 +41,28 @@ func ReadLinesToChan(port string, baud int, filterFn func(string) bool) (<-chan 
 	go func() {
 		defer s.Close()
 		defer close(out)
+
 		reader := bufio.NewReader(s)
 		ansi := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
-				// stop on read error
-				return
+				return // stop on read error
 			}
-			line = ansi.ReplaceAllString(line, "")
+
+			line = ansi.ReplaceAllString(line, "") // strip ANSI colors
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
 			}
+
 			if filterFn != nil && !filterFn(line) {
 				continue
 			}
+
 			out <- line
 		}
 	}()
 	return out, nil
-}
-package serial
-
-import (
-	"github.com/tarm/serial"
-)
-
-// Open opens a serial port and returns the handle
-func Open(port string, baud int) (*serial.Port, error) {
-	cfg := &serial.Config{
-		Name: port,
-		Baud: baud,
-	}
-	return serial.OpenPort(cfg)
 }
