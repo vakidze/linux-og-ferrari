@@ -1,0 +1,42 @@
+name: Linux Build (Fyne GUI)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install system deps for Fyne (GTK/OpenGL)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libgl1-mesa-dev xorg-dev libxkbcommon-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev pkg-config
+
+      - name: Enable CGO
+        run: |
+          go env -w CGO_ENABLED=1
+
+      - name: Tidy modules (generate go.sum)
+        run: |
+          go mod tidy
+
+      - name: Build binary
+        run: |
+          mkdir -p build
+          go build -o build/serial-logger ./cmd/app
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-logger-linux
+          path: build/serial-logger
