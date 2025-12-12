@@ -52,3 +52,17 @@ func ReadLinesToChan(port string, baud int, filterFn func(string) bool) (<-chan 
 	}()
 	return out, nil
 }
+package serial
+
+import (
+	"github.com/tarm/serial"
+)
+
+// Open opens a serial port and returns the handle
+func Open(port string, baud int) (*serial.Port, error) {
+	cfg := &serial.Config{
+		Name: port,
+		Baud: baud,
+	}
+	return serial.OpenPort(cfg)
+}
