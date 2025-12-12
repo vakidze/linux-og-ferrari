@@ -2,151 +2,117 @@ package main
 
 import (
 	"fmt"
-	"log"
-	"os"
-	"path/filepath"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/vakidze/Linux-og-ferari/internal/serial"
 	"github.com/vakidze/Linux-og-ferari/internal/logger"
+	"github.com/vakidze/Linux-og-ferari/internal/serial"
 )
 
 func main() {
 	a := app.New()
-	w := a.NewWindow("Linux Serial Logger - GUI")
-	w.Resize(fyne.NewSize(900, 600))
+	w := a.NewWindow("Linux Serial Logger GUI")
+	w.Resize(fyne.NewSize(600, 400))
 
-	ports, _ := serial.ListPorts()
-	portSelect := widget.NewSelect(ports, func(string) {})
+	// Serial port input
+	portEntry := widget.NewEntry()
+	portEntry.SetPlaceHolder("/dev/ttyUSB0")
 
-	startBtn := widget.NewButton("Start", nil)
+	baudEntry := widget.NewEntry()
+	baudEntry.SetPlaceHolder("115200")
+
+	logBox := widget.NewMultiLineEntry()
+	logBox.Wrapping = fyne.TextWrapWord
+	logBox.SetMinRowsVisible(15)
+	logBox.Disable() // instead of SetReadOnly
+
+	status := widget.NewLabel("Idle")
+
+	startBtn := widget.NewButton("Start Logging", nil)
 	stopBtn := widget.NewButton("Stop", nil)
 	stopBtn.Disable()
 
-	filterCheck := widget.NewCheck("Filter login prompts (login:~$)", func(bool) {})
-
-	saveBtn := widget.NewButton("Save CSV", nil)
-	saveBtn.Disable()
-
-	logBox := widget.NewMultiLineEntry()
-	logBox.SetReadOnly(true)
-
-	status := widget.NewLabel("Ready")
-
-	// logger
-	csvLogger, err := logger.NewCSVLogger()
-	if err != nil {
-		log.Printf("failed to create logger: %v", err)
-	} else {
-		saveBtn.Enable()
-	}
-
-	// channels and control
-	lineCh := make(chan string, 200)
-	stopCh := make(chan struct{})
-	running := false
-
-	appendLine := func(s string) {
-		// prepend newest on top
-		if logBox.Text == "" {
-			logBox.SetText(s)
-		} else {
-			logBox.SetText(s + "\n" + logBox.Text)
-		}
-	}
-
-	// consumer: write to UI and CSV
-	go func() {
-		for l := range lineCh {
-			ts := time.Now().Format("2006-01-02 15:04:05.000")
-			appendLine(fmt.Sprintf("%s  %s", ts, l))
-			if csvLogger != nil {
-				csvLogger.Write(ts, l)
-			}
-		}
-	}()
+	var stopCh chan struct{}
+	var l *logger.CSVLogger
 
 	startBtn.OnTapped = func() {
-		if running {
-			return
-		}
-		port := portSelect.Selected
-		if port == "" {
-			status.SetText("Select a port first")
+		if portEntry.Text == "" {
+			status.SetText("Port required")
 			return
 		}
 
-		// start reader
-		running = true
+		baud := 115200
+		if baudEntry.Text != "" {
+			fmt.Sscan(baudEntry.Text, &baud)
+		}
+
+		p, err := serial.Open(portEntry.Text, baud)
+		if err != nil {
+			status.SetText("Open error: " + err.Error())
+			return
+		}
+
+		l = logger.New("logs")
+		stopCh = make(chan struct{})
+
 		startBtn.Disable()
 		stopBtn.Enable()
-		status.SetText("Logging...")
+		status.SetText("Running...")
 
 		go func() {
-			filterFn := func(s string) bool {
-				if filterCheck.Checked && s == "login:~$" {
-					return false
-				}
-				return true
-			}
-			ch, err := serial.ReadLinesToChan(port, 115200, filterFn)
-			if err != nil {
-				status.SetText("Failed to open port: " + err.Error())
-				running = false
-				startBtn.Enable()
-				stopBtn.Disable()
-				return
-			}
-			for l := range ch {
+			buf := make([]byte, 256)
+
+			for {
 				select {
+				case <-stopCh:
+					p.Close()
+					return
 				default:
-					lineCh <- l
+					n, err := p.Read(buf)
+					if err != nil {
+						time.Sleep(100 * time.Millisecond)
+						continue
+					}
+
+					data := string(buf[:n])
+
+					// update GUI thread-safe
+					logBox.SetText(logBox.Text + data)
+
+					l.WriteLine(data)
 				}
 			}
 		}()
 	}
 
 	stopBtn.OnTapped = func() {
-		if !running {
-			return
+		if stopCh != nil {
+			close(stopCh)
 		}
-		// stopping by closing port handled inside serial package; here we just toggle UI
-		running = false
+
 		startBtn.Enable()
 		stopBtn.Disable()
 		status.SetText("Stopped")
-	}
-
-	saveBtn.OnTapped = func() {
-		if csvLogger == nil {
-			status.SetText("No logger")
-			return
-		}
-		csvLogger.CloseAndSave()
-		// create new logger file after saving
-		newLogger, err := logger.NewCSVLogger()
-		if err == nil {
-			csvLogger = newLogger
-			status.SetText("Saved and started new CSV")
-		} else {
-			status.SetText("Saved. Failed to start new CSV")
+		if l != nil {
+			l.Close()
 		}
 	}
 
-	// layout
-	buttons := container.NewHBox(startBtn, stopBtn, saveBtn, filterCheck)
-	top := container.NewVBox(portSelect, buttons, status)
-	content := container.NewBorder(top, nil, nil, nil, container.NewVScroll(logBox))
+	form := container.NewVBox(
+		widget.NewLabel("Serial Port:"),
+		portEntry,
+		widget.NewLabel("Baud:"),
+		baudEntry,
+		startBtn,
+		stopBtn,
+		status,
+		logBox,
+	)
 
-	w.SetContent(content)
+	w.SetContent(form)
 	w.ShowAndRun()
-
-	// on exit, ensure logger closed
-	if csvLogger != nil {
-		csvLogger.CloseAndSave()
-	}
 }
